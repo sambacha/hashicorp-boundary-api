@@ -1,60 +1,80 @@
-# Boilerplate Swagger API documentation with GitHub Pages
+---
+layout: docs
+page_title: API
+sidebar_title: API
+description: |-
+  Boundary's HTTP API standards
+---
 
+# API
 
-## Overivew
+Boundary's API is a a JSON-based HTTP API that adheres to a set of standards that are rigidly followed. At its core, it is a standards-compliant JSON API for both input and output.
 
-This repository is a template for using the [Swagger UI](https://github.com/swagger-api/swagger-ui) to dynamically generate beautiful documentation for your API and host it for free with GitHub Pages.
+Before reading this page, it is useful to understand Boundary's [domain model](/docs/concepts/domain-model) to be aware of the terminology used here.
 
-The template will periodically auto-update the Swagger UI dependency and create a pull request. See the [GitHub Actions workflow here](.github/workflows/update-swagger.yml).
+Boundary's API is also described via OpenAPI v2; the version corresponding to any tag of Boundary's source code can be found in Boundary's [GitHub repository](https://github.com/hashicorp/boundary/blob/main/internal/gen/controller.swagger.json).
 
-The example API specification used by this repository can be seen hosted at [https://peter-evans.github.io/swagger-github-pages](https://peter-evans.github.io/swagger-github-pages/).
+Boundary's current API version is 1; all API paths begin with `/v1/`.
 
-## Steps to use this template
+## Status Codes
 
-1. Click the `Use this template` button above to create a new repository from this template.
+- `2XX`: Boundary returns a code between `200` and `299` on success. Generally this is `200`, but implementations should be prepared to accept any `2XX` status code as indicating success. If a call returns a `2XX` code that is not `200`, it will follow well-understood semantics for those status codes.
+- `400`: Boundary returns `400` when a command cannot be completed due to invalid user input, except for a properly-formatted identifier that does not map to an existing resource, which will return a `404` as discussed below.
+- `401`: Boundary returns `401` if no authentication token is provided or if the provided token is invalid. A valid token that simply does not have permission for a resource will return a `403` instead. A token that is invalid or missing, but where the anonymous user (`u_anon`) is able to successfully perform the action, will not return a `401` but instead will return the result of the action.
+- `403`: Boundary returns `403` if a provided token was valid but does not have the grants required to perform the requested action.
+- `404`: Boundary returns `404` if a resource cannot be found. Note that this happens _prior_ to authentication/authorization checking in nearly all cases as the resource information (such as its scope, available actions, etc.) is a required part of that check. As a result, an action against a resource that does not exist will return a `404` instead of a `401` or `403`. While this could be considered an information leak, since IDs are randomly generated and this only discloses whether an ID is valid, it's tolerable as it allows for far simpler and more robust client implementation.
+- `405`: Boundary returns a `405` to indicate that the method (HTTP verb or custom action) is not implemented for the given resource.
+- `500`: Boundary returns `500` if an error occurred that is not (directly) tied to invalid user input. If a `500` is generated, information about the error will be logged to Boundary's server log but is not generally provided to the client.
 
-2. Go to the settings for your repository at `https://github.com/{github-username}/{repository-name}/settings` and enable GitHub Pages.
+## Path Layout
 
-    ![Headers](/screenshots/swagger-github-pages.png?raw=true)
-    
-3. Browse to the Swagger documentation at `https://{github-username}.github.io/{repository-name}/`.
+Boundary follows a predictable path layout. There are two fundamental types of URL paths, each supporting a different set of operations.
 
+### Collections
 
-## Steps to manually configure in your own repository
+Collections of resources are top level paths with plural English names for the resource, e.g. `/roles` and `/hosts`. Collections support the following operations:
 
-1. Download the latest stable release of the Swagger UI [here](https://github.com/swagger-api/swagger-ui/releases).
+- Creation of new resources within that collection
+- Listing of resources within that collection
 
-2. Extract the contents and copy the "dist" directory to the root of your repository.
+All collection operations require supplying the enclosing resource. Depending on the collection type, this will be one of the following:
 
-3. Move the file "index.html" from the directory "dist" to the root of your repository.
-    ```
-    mv dist/index.html .
-    ```
-    
-4. Copy the YAML specification file for your API to the root of your repository.
+- A scope, indicating the scope in which an operation should take place. For instance, a POST to `/roles` would need to indicate whether the role should be created within the `global` scope or an org-level scope like `o_1234567890`.
+- A parent resource of the appropriate type. For instance, hosts and host sets are child resources of host catalogs. When creating a new host set within a host catalog, a POST to `/host-sets` would need to indicate the host catalog ID with which the host-set should be associated.
 
-5. Edit [index.html](index.html) and change the `url` property to reference your local YAML file. 
-    ```javascript
-        const ui = SwaggerUIBundle({
-            url: "swagger.yaml",
-        ...
-    ```
-    Then fix any references to files in the "dist" directory.
-    ```html
-    ...
-    <link rel="stylesheet" type="text/css" href="dist/swagger-ui.css" >
-    <link rel="icon" type="image/png" href="dist/favicon-32x32.png" sizes="32x32" />
-    <link rel="icon" type="image/png" href="dist/favicon-16x16.png" sizes="16x16" />    
-    ...
-    <script src="dist/swagger-ui-bundle.js"> </script>
-    <script src="dist/swagger-ui-standalone-preset.js"> </script>    
-    ...
-    ```
-    
-6. Go to the settings for your repository at `https://github.com/{github-username}/{repository-name}/settings` and enable GitHub Pages.
+### Resources
 
-    ![Headers](/screenshots/swagger-github-pages.png?raw=true)
-    
-7. Browse to the Swagger documentation at `https://{github-username}.github.io/{repository-name}/`.
+Resources themselves are defined by ID specifiers within a collection path, e.g. `/roles/r_1234567890`. Resources support the following operations:
 
+- Reading a resource's properties
+- Updating a resource's properties
+- Deleting a resource
+- Custom methods specific to a resource type
 
+Depending on the resource type, various parameters may be available. Some are common across all resource types (e.g. `name` and `description`); others are available only for specific types. Further, some concrete-types of abstract resources include an opaque `attributes` JSON object with type-specific values.
+
+For instance, an auth method is an abstract type; a `password` auth method is a concrete implementation of that type. When creating such an auth method, a `type` parameter will indicate that it should be the `password` type, while values specific to the `password` type auth method, such as minimum password length, will be contained within an `attributes` object.
+
+## Methods
+
+The following method conventions are used within Boundary's API:
+
+### GET
+
+`GET` is used for reading a resource or listing resources in a collection. The behavior depends on whether the `GET` is issued against a collection (`/roles`) or a singular resource (`/roles/r_1234567890`). In the former case it lists resources within the collection; in the latter it performs a read on that particular resource.
+
+### POST
+
+`POST` is used for creating a resource or performing custom actions against a resoruce. When creating a resource, `POST` is used against a collection (`/roles`). When performing a custom action, `POST` is used against a particular resource (`/roles/r_1234567890:set-principals`).
+
+### PATCH
+
+`PATCH` is used to update a resource's parameters. The following are behaviors to be aware of when using `PATCH`:
+
+- In nearly all cases, a `version` parameter is required. This is used for check-and-set, to ensure that the update operation is being performed against a known resource. The version parameter is returned from a `GET` operation on the resource so the current version, along with the resource's other current values, can be looked up at any time.
+- Passing a JSON `null` for a parameter has the effect of reverting that parameter to its default. For some parameters (e.g. `name`) this will simply clear the value (as the default `name` for a resource is empty); for other parameters this will revert to the current defaults within Boundary.
+- All parameters specified as part of a `PATCH` operation will be considered to be parameters that should be updated.
+
+### DELETE
+
+`DELETE` is used for deleting a specific resource, and is only used against a particular resource path.
